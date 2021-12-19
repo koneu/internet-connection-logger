@@ -26,11 +26,16 @@ pingmean_html_file_name = "data/ping_mean.html"
 download_html_file_name = "data/download.html"
 upload_html_file_name = "data/upload.html"
 
-if not os.path.exists(speedtest_data_file_name):
-    with open(speedtest_data_file_name, 'w'): pass
+def ensure_file(file_path):
+    directory = os.path.dirname(file_path)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    
+    if not os.path.exists(file_path):
+        with open(file_path, 'w'): pass
 
-if not os.path.exists(ping_data_file_name):
-    with open(ping_data_file_name, 'w'): pass
+ensure_file(speedtest_data_file_name)
+ensure_file(ping_data_file_name)
 
 
 # add header in files if content got deleted
