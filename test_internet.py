@@ -7,7 +7,10 @@ import plotly.express as px
 import threading
 from datetime import datetime
 import plotly.graph_objects as go
-from ping3 import ping
+
+import subprocess
+import platform
+import re
 
 # config
 update_ud_every_seconds = 60 * 10
@@ -25,6 +28,50 @@ ping_html_file_name = "data/ping.html"
 pingmean_html_file_name = "data/ping_mean.html"
 download_html_file_name = "data/download.html"
 upload_html_file_name = "data/upload.html"
+
+PING_MAX = 1
+
+
+
+def system_ping(host, count=1, timeout=2):
+    param = '-n' if platform.system().lower() == 'windows' else '-c'
+    timeout_param = '-w' if platform.system().lower() == 'windows' else '-W'
+
+    command = ['ping', param, str(count), host]
+    if platform.system().lower() == 'windows':
+        command.extend([timeout_param, str(timeout * 1000)]) # Windows timeout in ms
+    else:
+        command.extend([timeout_param, str(timeout)]) # Linux timeout in seconds
+
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 1
+        )
+
+        if result.returncode == 0:
+            if platform.system().lower() == 'windows':
+                match = re.search(r'Average = (\d+)ms', result.stdout)
+                if match:
+                    return float(match.group(1)) / 1000 # Convert ms to seconds
+            else: # Linux/macOS
+                match = re.search(r'min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/[\d.]+ ms', result.stdout)
+                if match:
+                    return float(match.group(1)) / 1000 # Convert ms to seconds
+            return 0.0 # Could not parse, but ping was successful
+        else:
+            return PING_MAX
+    except subprocess.TimeoutExpired:
+        print(f"Ping to {host} timed out.")
+        return PING_MAX
+    except FileNotFoundError:
+        print(f"Error: 'ping' command not found. Please ensure it's in your PATH.")
+        return PING_MAX
+    except Exception as e:
+        print(f"An error occurred during system ping: {e}")
+        return PING_MAX
 
 def ensure_file(file_path):
     directory = os.path.dirname(file_path)
@@ -56,7 +103,7 @@ if os.stat(ping_data_file_name).st_size == 0:
 # buisness logic
 def add_ud_measurement():
     try:
-        st = speedtest.Speedtest(timeout = 99)
+        st = speedtest.Speedtest(timeout = 99, secure=True)
         st.download()
         st.upload()
 
@@ -67,12 +114,14 @@ def add_ud_measurement():
 
         with open(speedtest_data_file_name,'a') as fd:
             fd.write(entry)
-    except:
+    except Exception as e: 
+        print("[speedtest] unsuccessfull speedtests")
+        print(e)
         t = datetime.now()
         entry = str(t) + "," + \
             str(0) + "," + \
             str(0) + "," + \
-            str(9999) + "\n"
+            str(PING_MAX) + "\n"
             
         with open(speedtest_data_file_name,'a') as fd:
             fd.write(entry)
@@ -83,10 +132,12 @@ def add_ping_measurement():
 
 
     for host in update_ping_hostname:
-        r = 9999
+        r = PING_MAX
         try:
-            r = ping(host)  
-        except:
+            r = system_ping(host)  
+        except Exception as e: 
+            print(e)
+            print("[ping] unsuccessfull ping on " + host)
             pass
         entry = entry + "," + str(r)
     entry = entry + "\n"
@@ -142,8 +193,11 @@ def update_current_data_html():
     fig_pin.write_html(pingmean_html_file_name)
     
 
-    mean_data = df_data.tail(current_data_nuOfRelevantPoints).mean()
-    max_data = df_data.max()
+    # Select only the numeric columns before calculating the mean
+    numeric_df_data = df_data[['download', 'upload', 'ping']] # Exclude 'timestamp'
+    mean_data = numeric_df_data.tail(current_data_nuOfRelevantPoints).mean()
+    max_data = numeric_df_data.max() # Also ensure max is only on numeric columns
+
     
     colors = ['green', 'red']
     fig_download = go.Figure(data=[go.Pie(labels=['download','missing'],
@@ -170,21 +224,27 @@ def update_current_data_html():
 
 
 
-    
 def repeat_add_ud_measurement():
-  threading.Timer(update_ud_every_seconds, repeat_add_ud_measurement).start()
-  add_ud_measurement()
-  update_ud_html()
+    # Schedule the next run *before* executing the current logic to ensure consistent timing
+    threading.Timer(update_ud_every_seconds, repeat_add_ud_measurement).start()
+    add_ud_measurement()
+    update_ud_html()
 
 def repeat_add_ping_measurement():
-  threading.Timer(update_ping_every_seconds, repeat_add_ping_measurement).start()
-  add_ping_measurement()
-  update_ping_html()
-  update_current_data_html()
-
-  
+    # Schedule the next run *before* executing the current logic to ensure consistent timing
+    threading.Timer(update_ping_every_seconds, repeat_add_ping_measurement).start()
+    add_ping_measurement()
+    update_ping_html()
+    update_current_data_html()
 
 
 if __name__ == '__main__':
+    # Initial calls to start the measurements and updates
+    add_ud_measurement() # Run once immediately
+    add_ping_measurement() # Run once immediately
+    update_ud_html() # Update HTML after initial measurements
+    update_ping_html()
+    update_current_data_html()
+
     repeat_add_ud_measurement()
     repeat_add_ping_measurement()
